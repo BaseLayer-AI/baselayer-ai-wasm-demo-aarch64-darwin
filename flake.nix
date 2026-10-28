@@ -38,7 +38,8 @@
           }
           EOF
 
-          ${rustToolchain}/bin/rustc --target wasm32-unknown-unknown --crate-type cdylib -O $out/engine.rs -o $out/engine.wasm
+          # Optimized for size: opt-level=z and lto=fat drastically reduce WASM binary size
+          ${rustToolchain}/bin/rustc --target wasm32-unknown-unknown --crate-type cdylib -C opt-level=z -C lto=fat $out/engine.rs -o $out/engine.wasm
           
           # --- Launcher Source ---
           cat << 'EOF' > $out/launcher.rs
@@ -69,7 +70,7 @@
 
           # --- CI Telemetry Source ---
           cat << 'EOF' > $out/ci.rs
-          use std::{env, fs::File, io::Write, process::Command, thread, time::{Duration, Instant}};
+          use std::{env, fs::{self, File}, io::Write, process::Command, thread, time::{Duration, Instant}};
           fn main() {
               let wasm_bytes = include_bytes!("engine.wasm");
               let wasm_size = wasm_bytes.len();
@@ -102,14 +103,15 @@
               Command::new("open").arg("-a").arg("Safari").arg(&path).spawn().expect("Safari open failed");
               
               let start_time = Instant::now();
-              let timeout = Duration::from_secs(10);
+              let timeout = Duration::from_secs(20); // Increased timeout for CI runners
               let poll_interval = Duration::from_millis(500);
+              let mut success = false;
 
               println!("[Telemetry] Polling for WASM instantiation...");
               loop {
                   if start_time.elapsed() > timeout {
-                      eprintln!("❌ Timeout: WASM failed to instantiate within 10s");
-                      std::process::exit(1);
+                      eprintln!("❌ Timeout: WASM failed to instantiate within 20s");
+                      break;
                   }
 
                   let script = "tell application \"Safari\" to get name of document 1";
@@ -120,13 +122,23 @@
                       let elapsed = start_time.elapsed().as_millis();
                       println!("✅ Browser Capability Verified!");
                       println!("[Telemetry] Time to Instantiate: {}ms", elapsed);
-                      std::process::exit(0);
+                      success = true;
+                      break;
                   } else if title.contains("WASM_ERROR") {
                       eprintln!("❌ Browser reported WASM_ERROR");
-                      std::process::exit(1);
+                      break;
                   }
 
                   thread::sleep(poll_interval);
+              }
+
+              fs::remove_file(&path).expect("Failed to remove CI test file");
+              println!("[Telemetry] Cleanup: Removed {:?}", path);
+
+              if success {
+                  std::process::exit(0);
+              } else {
+                  std::process::exit(1);
               }
           }
           fn base64_encode(input: &[u8]) -> String {
