@@ -1,4 +1,4 @@
-# Follow the guidance at https://baselayer-ai.github.io
+# Follow the guidance at https://github.io
 {
   description = "WASM Kinetic Art Generator";
 
@@ -43,14 +43,24 @@
           
           # --- Launcher Source ---
           cat << 'EOF' > $out/launcher.rs
-          use std::{env, fs::File, io::Write, process::Command};
+          use std::{io::Write, net::TcpListener, process::Command};
           fn main() {
               let wasm_bytes = include_bytes!("engine.wasm");
               let wasm_base64 = base64_encode(wasm_bytes);
               let html_content = format!(r#"<!DOCTYPE html><html><head><title>WASM Kinetic Art</title></head><body style='margin:0;'><canvas id="canvas"></canvas><script>const base64 = '{}'; const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0)); WebAssembly.instantiate(bytes).then(({{instance}}) => {{ const {{ update_time, get_particle_pos, get_particle_y }} = instance.exports; const canvas = document.getElementById('canvas'); const ctx = canvas.getContext('2d'); const resize = () => {{ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }}; window.onresize = resize; resize(); const draw = () => {{ update_time(0.02); ctx.fillStyle = 'rgba(5, 5, 5, 0.15)'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#00ffcc'; for(let i=0; i<250; i++) {{ const x = (canvas.width/2) + get_particle_pos(i, 300); const y = (canvas.height/2) + get_particle_y(i, 300); ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI*2); ctx.fill(); }} requestAnimationFrame(draw); }}; draw(); }});</script></body></html>"#, wasm_base64);
-              let mut temp_path = env::temp_dir(); temp_path.push("wasm_art_generator.html");
-              File::create(&temp_path).and_then(|mut f| f.write_all(html_content.as_bytes())).expect("Failed to write HTML");
-              Command::new("open").arg(&temp_path).spawn().expect("Failed to open browser");
+              
+              let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}", html_content.len(), html_content);
+              let listener = TcpListener::bind("127.0.0.1:8888").expect("Failed to bind to port 8888");
+              println!("[Server] In-memory server running at http://127.0.0.1:8888");
+
+              Command::new("open").arg("http://127.0.0.1:8888").spawn().expect("Failed to open browser");
+
+              for stream in listener.incoming() {
+                  if let Ok(mut stream) = stream {
+                      let _ = stream.write_all(response.as_bytes());
+                      let _ = stream.flush();
+                  }
+              }
           }
           fn base64_encode(input: &[u8]) -> String {
               const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -70,7 +80,7 @@
 
           # --- CI Telemetry Source ---
           cat << 'EOF' > $out/ci.rs
-          use std::{env, fs::{self, File}, io::Write, process::Command, thread, time::{Duration, Instant}};
+          use std::{io::Write, net::TcpListener, process::Command, thread, time::{Duration, Instant}};
           fn main() {
               let wasm_bytes = include_bytes!("engine.wasm");
               let wasm_size = wasm_bytes.len();
@@ -94,24 +104,29 @@
                   </script></body></html>"#, wasm_base64
               );
 
-              let mut path = env::current_dir().unwrap();
-              path.push("ci_test.html");
-              File::create(&path).and_then(|mut f| f.write_all(html_content.as_bytes())).expect("Write failed");
-              println!("[Telemetry] Test page generated at: {:?}", path);
+              let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}", html_content.len(), html_content);
+              let listener = TcpListener::bind("127.0.0.1:8888").expect("Failed to bind to port 8888");
+              listener.set_nonblocking(true).expect("Cannot set non-blocking");
 
-              println!("[Telemetry] Launching Safari...");
-              Command::new("open").arg("-a").arg("Safari").arg(&path).spawn().expect("Safari open failed");
+              println!("[Telemetry] Launching Safari targeting http://127.0.0.1:8888 ...");
+              Command::new("open").arg("-a").arg("Safari").arg("http://127.0.0.1:8888").spawn().expect("Safari open failed");
               
               let start_time = Instant::now();
-              let timeout = Duration::from_secs(20); // Increased timeout for CI runners
+              let timeout = Duration::from_secs(20);
               let poll_interval = Duration::from_millis(500);
               let mut success = false;
 
-              println!("[Telemetry] Polling for WASM instantiation...");
+              println!("[Telemetry] Polling for WASM instantiation via HTTP and osascript...");
               loop {
                   if start_time.elapsed() > timeout {
                       eprintln!("❌ Timeout: WASM failed to instantiate within 20s");
                       break;
+                  }
+
+                  // Non-blocking serve for any incoming connections from Safari
+                  if let Ok((mut stream, _)) = listener.accept() {
+                      let _ = stream.write_all(response.as_bytes());
+                      let _ = stream.flush();
                   }
 
                   let script = "tell application \"Safari\" to get name of document 1";
@@ -131,9 +146,6 @@
 
                   thread::sleep(poll_interval);
               }
-
-              fs::remove_file(&path).expect("Failed to remove CI test file");
-              println!("[Telemetry] Cleanup: Removed {:?}", path);
 
               if success {
                   std::process::exit(0);
