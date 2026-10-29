@@ -2,8 +2,7 @@
   description = "WASM Kinetic Art Generator";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
-    # rust-overlay removed
+    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/*";
   };
 
   outputs = { self, nixpkgs }:
