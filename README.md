@@ -18,3 +18,5 @@ nix flake show "https://flakehub.com/f/BaseLayer-AI/baselayer-ai-wasm-demo-aarch
 ```
 nix run "https://flakehub.com/f/BaseLayer-AI/baselayer-ai-wasm-demo-aarch64-darwin/*"
 ```
+
+![](screenshot.png)
